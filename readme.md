@@ -442,3 +442,183 @@ ups.conf
 qnap
 upsdrvctl --version
 Network UPS Tools - UPS driver controller 2.7.4
+
+
+
+
+
+
+## 未看文章：
+NUT介紹
+NUT可以單機使用，也可以透過網路讓多台電腦共享UPS資訊。先讓一台樹莓派（或是其他電腦）透過USB等方式連上UPS成為NUT Server，然後就可以透過NUT Driver讀取UPS資訊，在偵測到停電而且UPS電量不足的情況下讓電腦自動關機。而其他沒有透過USB連接UPS的電腦（稱為NUT Client）也能透過NUT Server得知UPS現在快沒電了，在UPS斷電前一起安全的關機。
+
+NUT元件
+
+名稱	說明
+nut-driver	與UPS溝通的驅動程式。
+nut-server	NUT伺服器元件，nut-server透過nut-driver獲得資訊後傳遞給Client端。
+nut-client (nut-monitor)	負責連上nut-server獲取UPS資訊，然後控制本機關機等操作。
+以我的範例中nut-server和nut-client要安裝在樹莓派上面，讓樹莓派可以讀取UPS資訊，並且提供API給nut-client使用。
+
+而樹莓派和其他需要UPS資訊的電腦要安裝nut-client，即可從nut-server上獲取UPS資訊，在必要時關閉自己的電源，也可以遠端操控UPS進行放電測試、蜂鳴器開關等設定。
+
+NUT常用程式與指令
+
+名稱	說明
+upsd	NUT Server的Deamon。
+upsdrvctl	NUT Server上的UPS驅動程式。
+upsc	簡易版的UPS Client，可以快速連上本地或網路上的NUT Server觀看UPS狀態。
+upsmon	監看UPS與關機控制的程式。
+upscmd	對UPS下達指令，例如開始電池測試、關閉蜂鳴器（嗶嗶聲）等。
+upslog	查看UPS狀態紀錄。
+硬體連接
+大部分UPS後面會有USB接孔，利用這個孔接上樹莓派。以我這邊為例UPS是USB-B的孔，所以要買一條USB-B接USB-A的線。接上後我們可以在樹莓派上輸入lsusb檢查樹莓派跟UPS是否有順利連上，連上的話會看到類似以下訊息。
+
+klab.tw:~ $ lsusb
+Bus 001 Device 004: ID 0700:0501 Cyber Power System, Inc. CP1500 AVR UPS
+安裝NUT
+我的樹莓派使用的是Raspbian，使用Debian、Unbuntu等發行版都可以通過以下指令安裝。安裝nut後會一併安裝nut-server跟nut-client等程式。
+
+sudo apt-get update
+sudo apt-get install -y nut
+Red Hat、CentOS之類的話換成yum指令應該就可以，但自從CentOS被放棄之後我就離開rpm跑去dpkg了，手上沒機器幫忙測試。
+
+sudo yum install nut
+設定NUT
+設定檔案介紹
+
+NUT相關的設定檔案放在 /etc/nut 資料夾底下，以下是各個設定檔案的簡介。
+
+nut.conf：NUT運作模式等基本設定
+ups.conf：NUT的UPS Driver要連線的UPS的設定
+upsd.conf：NUT的UPS Daemon的設定
+upsd.users：nut-server使用者的帳密（跟Linux帳密無關）
+upsmon.conf：nut-monitor的設定
+upssched.conf：NUT排程設定
+UPS連線設定
+
+輸入sudo nano /etc/nut/ups.conf。
+
+/etc/nut/ups.conf
+maxretry = 3
+[ups1]
+	driver = usbhid-ups
+	port = auto
+	desc = "Cyber Power System, Inc. CP1500 AVR UPS"
+要注意maxretry = 3這行是原本預設就有的，新增加的設定一定要寫在這行之下，不然讀取設定時會出錯。[ups1] 是UPS名稱，可以依照需求取別的名稱，例如 [cyberpower1] 之類的。driver是連接的驅動程式，通常USB的UPS就寫上usbhid-ups就好，可以參考官方文件。port的部分輸入auto即可。desc跟設定沒關係，不寫也可以。
+
+設定完ups.conf要啟動UPS Driver，輸入sudo upsdrvctl start。已經啟動過的話要先使用sudo upsdrvctl stop關閉後再重新啟動。
+
+NUT模式設定
+
+輸入sudo nano /etc/nut/nut.conf。
+
+開啟NUT設定檔找到MODE那行註解或刪除掉原本的 MODE=none，改成 MODE=netserver。其他MODE還有單機模式的 standalone、不連接UPS只跟Server溝通的 netclient。
+
+/etc/nut/nut.conf
+MODE=netserver
+設定完成要重新啟動nut-server，輸入sudo systemctl restart nut-server，也可以等以下的設定都做完後再重啟即可。
+
+NUT網路設定
+
+這個是作為NUT Server時才需要設定的，這邊指定NUT Server要監聽哪一個本機IP。
+
+輸入sudo nano /etc/nut/upsd.conf。
+
+/etc/nut/upsd.conf
+LISTEN 0.0.0.0 3493
+輸入0.0.0.0代表監聽本機所有的IP，如果只想讓localhost使用，可以輸入127.0.0.1。後面的3493是要使用的TCP Port，預設的port就是3493，因此可以省略這個設定。
+
+設定完成要重新啟動nut-server，輸入sudo systemctl restart nut-server，也可以等以下的設定都做完後再重啟即可。
+
+NUT帳號設定
+
+這邊跟上一個設定一樣，是作為NUT Server時才需要設定的。
+
+輸入sudo nano /etc/nut/upsd.users。
+
+/etc/nut/upsd.users
+[admin]
+        password = password
+        actions = SET
+        instcmds = ALL
+
+[upsmon]
+        password = password
+        upsmon master
+第一個admin帳號是給我們使用upscmd指令控制UPS的時候會使用到的帳號，各位可以不用取名為admin換成其他的，密碼也要記得換掉。第二個upsmon帳號是給nut-monitor使用的帳號。第二個帳號設定除了master之外還可以設定為slave，差別是電源不足的時候slave會先關機，master之後才關機。有些新版本的NUT可能會改叫做primary、secondary，理由應該跟Git的主要支線從master改成main一樣。
+
+設定完成要重新啟動nut-server，輸入sudo systemctl restart nut-server。
+
+附註：最後一行的upsmon master是官方給的設定範例，兩個字詞中間沒有加上等號。我實測有加沒加上等號都可以，但我還是保留原樣了。
+
+基本應用
+顯示UPS資訊
+
+到此步驟之後就可以從Linux上看到UPS的資訊，我們輸入upsc ups1或是upsc ups1@localhost就會顯示UPS的各種資訊，要注意ups1是我給UPS取的名稱，如果有自己取別的名稱的話就要自行更換。如果你的NUT Server不在本機，例如在192.168.0.100上面的ups2，指令就會變成upsc ups2@192.168.0.100。
+
+以下提供upsc輸出的資訊的說明，不同UPS可以輸出的資訊多寡可能會不一樣。
+
+名稱	說明	數值範例
+battery.charge	目前電池電量（百分比）	100
+battery.charge.warning	電池低電量警告閾值（百分比）	20
+battery.charge.low	電池低電量保護閾值（百分比）	10
+battery.runtime	預估電池剩餘供電時間（秒）	1000
+battery.type	電池類型	PbAcid
+battery.voltage	電池電壓	24.0
+battery.voltage.nominal	標準電壓值	24
+device.type	設備類型（NUT可以檢測UPS以外的一些電源設備）	ups
+driver.name	驅動名稱	usbhid-ups
+driver.parameter.port	與UPS的通訊埠	auto
+driver.version	驅動版本	2.7.4
+input.frequency	輸入的交流電頻率	60
+input.voltage	輸入到UPS的電壓（伏特）	115.0
+input.frequency	輸入到UPS的交流電頻率（我的UPS沒顯示，沒辦法提供數值範例）	
+input.transfer.high	電壓上限，超過時會啟動穩壓保護	136
+input.transfer.low	電壓下限，低於時會啟動穩壓保護	88
+output.voltage	目前輸出給用電設備的電壓	115.0
+ups.mfr	UPS製造商名稱	CPS
+ups.model	UPS型號名稱	CP1500PFCLCD
+ups.vendorid	UPS制造商ID	0764
+ups.productid	UPS型號ID	0501
+ups.load	UPS負載百分比	10
+ups.temperature	UPS溫度（我的UPS沒顯示，沒辦法提供數值範例）	
+ups.status	UPS狀態，常見有OL（正常）、OB（使用電池）、OB（低電量）、RB（電池測試）、CHRG（電池充電）	OL
+ups.beeper.status	UPS蜂鳴器是否啟動（停電時等狀況會一直叫）	enabled
+ups.test.result	UPS自我測試結果：No test initiated、In progress、
+Aborted、Done and passed…等	Done and passed
+控制UPS
+
+我們可以透過upscmd指令來對UPS下達指令，下達指令的時候會用上之前「upsd.users」檔案內設定的admin帳號與密碼。我們可以先使用-l參數來確認UPS可以使用哪些指令。
+
+upscmd -u admin -p password -l ups1@localhost
+跟upsc指令一樣，本機的時候可以省略@localhost，也可以控制網路上其他NUT Server。指令的參數可以不輸入-u，也可以不輸入-p，或是都不輸入，upscmd會再主動詢問我們。要注意如果你的NUT Server跟你下達指令的本機不是同一台，那麼你要輸入的帳號密碼是寫在NUT Server上面的「upsd.users」的帳密。
+
+以我的UPS為例下完可以看到以下說明。
+
+Instant commands supported on UPS [ups1]:
+
+beeper.disable - Disable the UPS beeper
+beeper.enable - Enable the UPS beeper
+beeper.mute - Temporarily mute the UPS beeper
+beeper.off - Obsolete (use beeper.disable or beeper.mute)
+beeper.on - Obsolete (use beeper.enable)
+load.off - Turn off the load immediately
+load.off.delay - Turn off the load with a delay (seconds)
+load.on - Turn on the load immediately
+load.on.delay - Turn on the load with a delay (seconds)
+shutdown.return - Turn off the load and return when power is back
+shutdown.stayoff - Turn off the load and remain off
+shutdown.stop - Stop a shutdown in progress
+test.battery.start.deep - Start a deep battery test
+test.battery.start.quick - Start a quick battery test
+test.battery.stop - Stop the battery test
+假如我希望UPS在電池模式下不要一直嗶嗶叫，就可以輸入以下指令來關閉蜂鳴器。
+
+upscmd -u admin -p password ups1@localhost beeper.disable
+這時候再輸入upsc ups1 ups.beeper.status就會看到蜂鳴器關閉了。
+
+又或者我們希望讓UPS進行放電測試，可以輸入以下指令。
+
+upscmd -u admin -p password ups1@localhost test.battery.start.quick
+放電測試完畢會自己結束，如果要強行停止測試可以下達停止指令。如果電池很舊了，負載又偏高，很可能一進行測試UPS就跳電了。
